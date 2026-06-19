@@ -1,19 +1,18 @@
 # server.py - Flask tracking server for Render.com
-from flask import Flask, request, redirect, send_file, jsonify
+from flask import Flask, request, redirect, jsonify
 from datetime import datetime
 import json
 import os
 import urllib.parse
 import logging
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Use environment variable for tracking file path
-TRACKING_FILE = os.environ.get('TRACKING_FILE', 'email_logs/tracking_data.json')
+# Use environment variable or default
+TRACKING_FILE = os.environ.get('TRACKING_FILE', 'tracking_data.json')
 
 def load_tracking_data():
     """Load tracking data from file"""
@@ -21,166 +20,166 @@ def load_tracking_data():
         try:
             with open(TRACKING_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading tracking data: {e}")
+        except:
             return {}
     return {}
 
 def save_tracking_data(data):
     """Save tracking data to file"""
     try:
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(TRACKING_FILE), exist_ok=True)
         with open(TRACKING_FILE, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         return True
     except Exception as e:
-        logger.error(f"Failed to save tracking data: {e}")
+        logger.error(f"Failed to save: {e}")
         return False
 
 @app.route('/')
 def home():
     """Home page with stats"""
-    tracking_data = load_tracking_data()
+    data = load_tracking_data()
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Email Tracking Dashboard</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+            .card { background: white; padding: 20px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+            .stats { display: flex; gap: 20px; flex-wrap: wrap; }
+            .stat-box { background: #e3f2fd; padding: 15px 25px; border-radius: 8px; }
+            .stat-box h3 { margin: 0; color: #1565C0; }
+            .stat-box p { margin: 5px 0 0; font-size: 24px; font-weight: bold; }
+            .campaign { border-left: 4px solid #4CAF50; }
+            .open { color: #4CAF50; }
+            .click { color: #FF9800; }
+        </style>
+    </head>
+    <body>
+        <h1>📊 Email Tracking Dashboard</h1>
+        <div class="card">
+            <div class="stats">
+                <div class="stat-box"><h3>📧 Tracked</h3><p>""" + str(len(data)) + """</p></div>
+                <div class="stat-box"><h3>👁️ Opens</h3><p>""" + str(sum(len(d.get('opens', [])) for d in data.values())) + """</p></div>
+                <div class="stat-box"><h3>🔗 Clicks</h3><p>""" + str(sum(len(d.get('clicks', [])) for d in data.values())) + """</p></div>
+            </div>
+        </div>
+    """
     
-    if not tracking_data:
-        return """
-        <h1>📊 Email Tracking Server</h1>
-        <p>No tracking data yet. Send some emails to see stats!</p>
-        <p>Tracking endpoints:</p>
-        <ul>
-            <li><code>GET /open/&lt;tracking_id&gt;</code> - Track email opens</li>
-            <li><code>GET /click/&lt;tracking_id&gt;?url=...</code> - Track link clicks</li>
-            <li><code>GET /stats</code> - View statistics</li>
-        </ul>
-        """
-    
-    html = "<h1>📊 Email Tracking Dashboard</h1><hr>"
-    total_opens = 0
-    total_clicks = 0
-    
-    for tracking_id, data in tracking_data.items():
-        opens = len(data.get('opens', []))
-        clicks = len(data.get('clicks', []))
-        total_opens += opens
-        total_clicks += clicks
-        
+    for tracking_id, d in data.items():
         html += f"""
-        <div style="border:1px solid #ccc; padding:15px; margin:10px 0; border-radius:8px;">
-            <h3>📧 {data.get('email', 'Unknown')}</h3>
-            <p><strong>Campaign:</strong> {data.get('campaign', 'General')}</p>
-            <p><strong>Sent:</strong> {data.get('sent_at', 'Unknown')}</p>
-            <p><strong>Opens:</strong> {opens} {'' if opens == 0 else '✅'}</p>
-            <p><strong>Clicks:</strong> {clicks} {'' if clicks == 0 else '🔗'}</p>
+        <div class="card campaign">
+            <h3>📧 {d.get('email', 'Unknown')}</h3>
+            <p><strong>Campaign:</strong> {d.get('campaign', 'General')}</p>
+            <p><strong>Sent:</strong> {d.get('sent_at', 'Unknown')}</p>
+            <p><span class="open">✅ Opens: {len(d.get('opens', []))}</span></p>
+            <p><span class="click">🔗 Clicks: {len(d.get('clicks', []))}</span></p>
         </div>
         """
     
-    html += f"""
-    <hr>
-    <h2>📊 Summary</h2>
-    <p>Total Opens: {total_opens}</p>
-    <p>Total Clicks: {total_clicks}</p>
-    <p>Total Tracked Emails: {len(tracking_data)}</p>
-    """
-    
+    html += "</body></html>"
     return html
 
 @app.route('/stats')
 def stats():
     """JSON endpoint for statistics"""
-    tracking_data = load_tracking_data()
+    data = load_tracking_data()
     
-    stats = {
-        'total_tracked': len(tracking_data),
-        'total_opens': 0,
-        'total_clicks': 0,
-        'campaigns': {}
-    }
+    total_opens = 0
+    total_clicks = 0
+    campaigns = {}
     
-    for tracking_id, data in tracking_data.items():
-        campaign = data.get('campaign', 'General')
-        opens = len(data.get('opens', []))
-        clicks = len(data.get('clicks', []))
+    for tracking_id, d in data.items():
+        campaign = d.get('campaign', 'General')
+        opens = len(d.get('opens', []))
+        clicks = len(d.get('clicks', []))
         
-        stats['total_opens'] += opens
-        stats['total_clicks'] += clicks
+        total_opens += opens
+        total_clicks += clicks
         
-        if campaign not in stats['campaigns']:
-            stats['campaigns'][campaign] = {
-                'sent': 0,
-                'opens': 0,
-                'clicks': 0
-            }
-        
-        stats['campaigns'][campaign]['sent'] += 1
-        stats['campaigns'][campaign]['opens'] += opens
-        stats['campaigns'][campaign]['clicks'] += clicks
+        if campaign not in campaigns:
+            campaigns[campaign] = {'sent': 0, 'opens': 0, 'clicks': 0}
+        campaigns[campaign]['sent'] += 1
+        campaigns[campaign]['opens'] += opens
+        campaigns[campaign]['clicks'] += clicks
     
-    return jsonify(stats)
+    return jsonify({
+        'total_tracked': len(data),
+        'total_opens': total_opens,
+        'total_clicks': total_clicks,
+        'campaigns': campaigns
+    })
 
 @app.route('/open/<tracking_id>')
 def track_open(tracking_id):
     """Track email open"""
-    tracking_data = load_tracking_data()
+    data = load_tracking_data()
     
-    if tracking_id in tracking_data:
-        if 'opens' not in tracking_data[tracking_id]:
-            tracking_data[tracking_id]['opens'] = []
-        
-        tracking_data[tracking_id]['opens'].append({
-            'timestamp': datetime.now().isoformat(),
-            'ip': request.remote_addr,
-            'user_agent': request.headers.get('User-Agent', 'Unknown')
-        })
-        tracking_data[tracking_id]['last_open'] = datetime.now().isoformat()
-        save_tracking_data(tracking_data)
-        logger.info(f"✅ Open tracked: {tracking_id} - {tracking_data[tracking_id].get('email', 'Unknown')}")
-    else:
-        logger.warning(f"⚠️ Unknown tracking ID: {tracking_id}")
+    if tracking_id not in data:
+        data[tracking_id] = {
+            'email': 'Unknown',
+            'campaign': 'General',
+            'sent_at': datetime.now().isoformat(),
+            'opens': [],
+            'clicks': []
+        }
+    
+    if 'opens' not in data[tracking_id]:
+        data[tracking_id]['opens'] = []
+    
+    data[tracking_id]['opens'].append({
+        'timestamp': datetime.now().isoformat(),
+        'ip': request.remote_addr,
+        'user_agent': request.headers.get('User-Agent', 'Unknown')
+    })
+    data[tracking_id]['last_open'] = datetime.now().isoformat()
+    save_tracking_data(data)
+    logger.info(f"✅ Open: {tracking_id}")
     
     # Return 1x1 transparent GIF
     pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x01D\x00;'
-    return pixel, 200, {'Content-Type': 'image/gif', 'Cache-Control': 'no-cache, no-store, must-revalidate'}
+    return pixel, 200, {'Content-Type': 'image/gif'}
 
 @app.route('/click/<tracking_id>')
 def track_click(tracking_id):
-    """Track link click and redirect"""
-    tracking_data = load_tracking_data()
+    """Track link click"""
+    data = load_tracking_data()
     url = request.args.get('url', 'https://dantelabs.us')
     
-    # Decode URL if it was encoded
     try:
         url = urllib.parse.unquote(url)
     except:
         pass
     
-    if tracking_id in tracking_data:
-        if 'clicks' not in tracking_data[tracking_id]:
-            tracking_data[tracking_id]['clicks'] = []
-        
-        tracking_data[tracking_id]['clicks'].append({
-            'timestamp': datetime.now().isoformat(),
-            'url': url,
-            'ip': request.remote_addr,
-            'user_agent': request.headers.get('User-Agent', 'Unknown')
-        })
-        tracking_data[tracking_id]['last_click'] = datetime.now().isoformat()
-        save_tracking_data(tracking_data)
-        logger.info(f"✅ Click tracked: {tracking_id} -> {url[:50]}")
-    else:
-        logger.warning(f"⚠️ Unknown tracking ID: {tracking_id}")
+    if tracking_id not in data:
+        data[tracking_id] = {
+            'email': 'Unknown',
+            'campaign': 'General',
+            'sent_at': datetime.now().isoformat(),
+            'opens': [],
+            'clicks': []
+        }
+    
+    if 'clicks' not in data[tracking_id]:
+        data[tracking_id]['clicks'] = []
+    
+    data[tracking_id]['clicks'].append({
+        'timestamp': datetime.now().isoformat(),
+        'url': url,
+        'ip': request.remote_addr,
+        'user_agent': request.headers.get('User-Agent', 'Unknown')
+    })
+    data[tracking_id]['last_click'] = datetime.now().isoformat()
+    save_tracking_data(data)
+    logger.info(f"✅ Click: {tracking_id}")
     
     return redirect(url, 302)
 
 @app.route('/ping')
 def ping():
-    """Health check endpoint for Render"""
+    """Health check"""
     return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    logger.info(f"🚀 Tracking Server Starting on port {port}")
-    logger.info(f"📊 Open tracking: /open/{{tracking_id}}")
-    logger.info(f"🔗 Click tracking: /click/{{tracking_id}}?url=...")
-    logger.info(f"📈 Stats: /stats")
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port)
