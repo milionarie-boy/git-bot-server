@@ -208,6 +208,35 @@ def save_tracking():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     return jsonify({'status': 'ok'})
 
+# Add to server.py
+@app.route('/logo/<tracking_id>')
+def serve_logo(tracking_id):
+    """Serve logo and track open"""
+    logger.info(f"🖼️ Logo loaded for tracking: {tracking_id}")
+    
+    data = load_tracking_data()
+    
+    if tracking_id not in data:
+        data[tracking_id] = {
+            'email': 'Unknown',
+            'campaign': 'General',
+            'sent_at': datetime.now().isoformat(),
+            'opens': [],
+            'clicks': []
+        }
+    
+    data[tracking_id]['opens'].append({
+        'timestamp': datetime.now().isoformat(),
+        'ip': request.remote_addr,
+        'user_agent': request.headers.get('User-Agent', 'Unknown'),
+        'source': 'logo'
+    })
+    data[tracking_id]['last_open'] = datetime.now().isoformat()
+    save_tracking_data(data)
+    
+    # Redirect to the actual logo
+    return redirect("https://i.ibb.co/3YYQXPHr/dantelabs-Logo.jpg", 302)
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
