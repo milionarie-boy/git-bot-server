@@ -180,6 +180,34 @@ def ping():
     """Health check"""
     return jsonify({'status': 'ok', 'timestamp': datetime.now().isoformat()})
 
+@app.route('/save_tracking', methods=['POST'])
+def save_tracking():
+    """Save tracking data from client"""
+    try:
+        data = request.get_json()
+        if data:
+            # Merge with existing data
+            existing = load_tracking_data()
+            for tracking_id, tracking_info in data.items():
+                if tracking_id not in existing:
+                    existing[tracking_id] = tracking_info
+                else:
+                    # Merge opens and clicks
+                    if 'opens' in tracking_info:
+                        existing[tracking_id]['opens'] = tracking_info['opens']
+                    if 'clicks' in tracking_info:
+                        existing[tracking_id]['clicks'] = tracking_info['clicks']
+                    if 'last_open' in tracking_info:
+                        existing[tracking_id]['last_open'] = tracking_info['last_open']
+                    if 'last_click' in tracking_info:
+                        existing[tracking_id]['last_click'] = tracking_info['last_click']
+            
+            save_tracking_data(existing)
+            return jsonify({'status': 'ok', 'message': 'Tracking data saved'})
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    return jsonify({'status': 'ok'})
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
