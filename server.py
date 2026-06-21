@@ -1,5 +1,5 @@
-# server.py - Clean Email Tracking Server for Render.com
-from flask import Flask, request, redirect, jsonify
+# server.py - Working Email Tracking Server for Render.com
+from flask import Flask, request, redirect, jsonify, Response
 from datetime import datetime
 import json
 import os
@@ -63,6 +63,7 @@ def home():
             .open { color: #4CAF50; }
             .click { color: #FF9800; }
             .email { color: #2196F3; }
+            .prefetch { color: #FF9800; font-size: 12px; }
     </style>
     </head>
     <body>
@@ -77,13 +78,18 @@ def home():
     """
     
     for tracking_id, d in data.items():
+        opens = len(d.get('opens', []))
+        clicks = len(d.get('clicks', []))
+        prefetches = d.get('prefetches', 0)
+        
         html += f"""
         <div class="campaign">
             <p><span class="email">📧 {d.get('email', 'Unknown')}</span></p>
             <p><strong>Campaign:</strong> {d.get('campaign', 'General')}</p>
             <p><strong>Sent:</strong> {d.get('sent_at', 'Unknown')}</p>
-            <p><span class="open">✅ Opens: {len(d.get('opens', []))}</span></p>
-            <p><span class="click">🔗 Clicks: {len(d.get('clicks', []))}</span></p>
+            <p><span class="open">✅ Opens: {opens}</span></p>
+            <p><span class="click">🔗 Clicks: {clicks}</span></p>
+            {f'<p><span class="prefetch">🔄 Prefetches: {prefetches}</span></p>' if prefetches > 0 else ''}
         </div>
         """
     
@@ -124,41 +130,60 @@ def stats():
 
 @app.route('/open/<tracking_id>')
 def track_open(tracking_id):
-    """Track email open"""
+    """Track email open - handles both real opens and prefetches"""
     logger.info(f"📨 Open request: {tracking_id}")
+    logger.info(f"   IP: {request.remote_addr}")
+    logger.info(f"   User-Agent: {request.headers.get('User-Agent', 'Unknown')[:50]}")
     
     data = load_tracking_data()
     
-    # Initialize tracking if new
+    # ALWAYS initialize if tracking_id doesn't exist
     if tracking_id not in data:
+        logger.warning(f"⚠️ New tracking ID: {tracking_id} - creating entry")
         data[tracking_id] = {
             'email': 'Unknown',
             'campaign': 'General',
             'sent_at': datetime.now().isoformat(),
             'opens': [],
-            'clicks': []
+            'clicks': [],
+            'prefetches': 0
         }
     
-    # Record open
+    # Ensure opens list exists
     if 'opens' not in data[tracking_id]:
         data[tracking_id]['opens'] = []
     
-    data[tracking_id]['opens'].append({
-        'timestamp': datetime.now().isoformat(),
-        'ip': request.remote_addr,
-        'user_agent': request.headers.get('User-Agent', 'Unknown')
-    })
-    data[tracking_id]['last_open'] = datetime.now().isoformat()
+    # Check if this is a prefetch (email client pre-loading)
+    user_agent = request.headers.get('User-Agent', '').lower()
+    is_prefetch = any(agent in user_agent for agent in ['googleimageproxy', 'outlook', 'gmail', 'yahoo', 'prefetch'])
+    
+    if is_prefetch:
+        # Record as prefetch
+        data[tracking_id]['prefetches'] = data[tracking_id].get('prefetches', 0) + 1
+        logger.info(f"🔄 Prefetch detected for: {tracking_id}")
+    else:
+        # Record as real open
+        data[tracking_id]['opens'].append({
+            'timestamp': datetime.now().isoformat(),
+            'ip': request.remote_addr,
+            'user_agent': request.headers.get('User-Agent', 'Unknown')
+        })
+        data[tracking_id]['last_open'] = datetime.now().isoformat()
+        logger.info(f"✅ Real open recorded for: {tracking_id} (total: {len(data[tracking_id]['opens'])})")
+    
     save_tracking_data(data)
     
-    logger.info(f"✅ Open recorded: {tracking_id} (total: {len(data[tracking_id]['opens'])})")
-    
-    # Return 1x1 transparent GIF
+    # Return 1x1 transparent GIF with proper headers
     pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x01D\x00;'
-    return pixel, 200, {
+    
+    response = Response(pixel, 200, {
         'Content-Type': 'image/gif',
-        'Cache-Control': 'no-cache, no-store, must-revalidate'
-    }
+        'Cache-Control': 'no-cache, no-store, must-revalidate, private',
+        'Pragma': 'no-cache',
+        'Expires': '0',
+        'X-Content-Type-Options': 'nosniff'
+    })
+    return response
 
 
 @app.route('/click/<tracking_id>')
@@ -175,20 +200,23 @@ def track_click(tracking_id):
     except:
         pass
     
-    # Initialize tracking if new
+    # ALWAYS initialize if tracking_id doesn't exist
     if tracking_id not in data:
+        logger.warning(f"⚠️ New tracking ID (click): {tracking_id} - creating entry")
         data[tracking_id] = {
             'email': 'Unknown',
             'campaign': 'General',
             'sent_at': datetime.now().isoformat(),
             'opens': [],
-            'clicks': []
+            'clicks': [],
+            'prefetches': 0
         }
     
-    # Record click
+    # Ensure clicks list exists
     if 'clicks' not in data[tracking_id]:
         data[tracking_id]['clicks'] = []
     
+    # Record click
     data[tracking_id]['clicks'].append({
         'timestamp': datetime.now().isoformat(),
         'url': url,
@@ -201,6 +229,73 @@ def track_click(tracking_id):
     logger.info(f"✅ Click recorded: {tracking_id} -> {url[:50]}")
     
     return redirect(url, 302)
+
+
+@app.route('/logo/<tracking_id>')
+def serve_logo(tracking_id):
+    """Serve logo and track open (for email clients that load images)"""
+    logger.info(f"🖼️ Logo requested with tracking: {tracking_id}")
+    
+    # Record as an open
+    data = load_tracking_data()
+    
+    if tracking_id not in data:
+        data[tracking_id] = {
+            'email': 'Unknown',
+            'campaign': 'General',
+            'sent_at': datetime.now().isoformat(),
+            'opens': [],
+            'clicks': [],
+            'prefetches': 0
+        }
+    
+    if 'opens' not in data[tracking_id]:
+        data[tracking_id]['opens'] = []
+    
+    # Logo loads are more likely to be real opens
+    data[tracking_id]['opens'].append({
+        'timestamp': datetime.now().isoformat(),
+        'ip': request.remote_addr,
+        'user_agent': request.headers.get('User-Agent', 'Unknown'),
+        'source': 'logo'
+    })
+    data[tracking_id]['last_open'] = datetime.now().isoformat()
+    save_tracking_data(data)
+    
+    logger.info(f"✅ Logo tracking recorded for: {tracking_id}")
+    
+    # Redirect to the actual logo
+    return redirect("https://i.ibb.co/3YYQXPHr/dantelabs-Logo.jpg", 302)
+
+
+@app.route('/save_tracking', methods=['POST'])
+def save_tracking():
+    """Save tracking data from client (for backup)"""
+    try:
+        data = request.get_json()
+        if data:
+            existing = load_tracking_data()
+            for tracking_id, tracking_info in data.items():
+                if tracking_id not in existing:
+                    existing[tracking_id] = tracking_info
+                else:
+                    # Merge opens and clicks
+                    if 'opens' in tracking_info:
+                        existing[tracking_id]['opens'] = tracking_info['opens']
+                    if 'clicks' in tracking_info:
+                        existing[tracking_id]['clicks'] = tracking_info['clicks']
+                    if 'last_open' in tracking_info:
+                        existing[tracking_id]['last_open'] = tracking_info['last_open']
+                    if 'last_click' in tracking_info:
+                        existing[tracking_id]['last_click'] = tracking_info['last_click']
+            
+            save_tracking_data(existing)
+            logger.info(f"✅ Tracking data saved from client: {len(data)} entries")
+            return jsonify({'status': 'ok', 'message': 'Tracking data saved'})
+    except Exception as e:
+        logger.error(f"Error saving tracking data: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/ping')
@@ -219,4 +314,5 @@ if __name__ == '__main__':
     logger.info(f"📈 Stats API: http://localhost:{port}/stats")
     logger.info(f"🖼️ Open tracking: http://localhost:{port}/open/{{tracking_id}}")
     logger.info(f"🔗 Click tracking: http://localhost:{port}/click/{{tracking_id}}")
+    logger.info(f"🔄 Save tracking: http://localhost:{port}/save_tracking")
     app.run(host='0.0.0.0', port=port, debug=False)
