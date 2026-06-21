@@ -5,6 +5,7 @@ import json
 import os
 import urllib.parse
 import logging
+import base64
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -343,6 +344,50 @@ def save_tracking():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     return jsonify({'status': 'ok'})
 
+# server.py - Add these new endpoints
+
+@app.route('/favicon/<tracking_id>')
+def track_favicon(tracking_id):
+    """Track favicon requests"""
+    logger.info(f"🎯 Favicon requested: {tracking_id}")
+    
+    data = load_tracking_data()
+    if tracking_id not in data:
+        data[tracking_id] = {
+            'email': 'Unknown',
+            'campaign': 'General',
+            'sent_at': datetime.now().isoformat(),
+            'opens': [],
+            'clicks': [],
+            'prefetches': 0,
+            'favicon_hits': 0
+        }
+    
+    if 'favicon_hits' not in data[tracking_id]:
+        data[tracking_id]['favicon_hits'] = 0
+    
+    data[tracking_id]['favicon_hits'] += 1
+    
+    if 'opens' not in data[tracking_id]:
+        data[tracking_id]['opens'] = []
+    
+    # Favicon is usually a real open (browser loads it automatically)
+    data[tracking_id]['opens'].append({
+        'timestamp': datetime.now().isoformat(),
+        'ip': request.remote_addr,
+        'user_agent': request.headers.get('User-Agent', 'Unknown'),
+        'source': 'favicon'
+    })
+    data[tracking_id]['last_open'] = datetime.now().isoformat()
+    data[tracking_id]['real_opens'] = data[tracking_id].get('real_opens', 0) + 1
+    save_tracking_data(data)
+    
+    # Return a transparent favicon
+    # 1x1 transparent PNG
+    favicon = base64.b64decode(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    )
+    return favicon, 200, {'Content-Type': 'image/x-icon'}
 
 @app.route('/ping')
 def ping():
