@@ -231,43 +231,6 @@ def track_click(tracking_id):
     return redirect(url, 302)
 
 
-@app.route('/logo/<tracking_id>')
-def serve_logo(tracking_id):
-    """Serve logo and track open (for email clients that load images)"""
-    logger.info(f"🖼️ Logo requested with tracking: {tracking_id}")
-    
-    # Record as an open
-    data = load_tracking_data()
-    
-    if tracking_id not in data:
-        data[tracking_id] = {
-            'email': 'Unknown',
-            'campaign': 'General',
-            'sent_at': datetime.now().isoformat(),
-            'opens': [],
-            'clicks': [],
-            'prefetches': 0
-        }
-    
-    if 'opens' not in data[tracking_id]:
-        data[tracking_id]['opens'] = []
-    
-    # Logo loads are more likely to be real opens
-    data[tracking_id]['opens'].append({
-        'timestamp': datetime.now().isoformat(),
-        'ip': request.remote_addr,
-        'user_agent': request.headers.get('User-Agent', 'Unknown'),
-        'source': 'logo'
-    })
-    data[tracking_id]['last_open'] = datetime.now().isoformat()
-    save_tracking_data(data)
-    
-    logger.info(f"✅ Logo tracking recorded for: {tracking_id}")
-    
-    # Redirect to the actual logo
-    return redirect("https://i.ibb.co/3YYQXPHr/dantelabs-Logo.jpg", 302)
-
-
 @app.route('/save_tracking', methods=['POST'])
 def save_tracking():
     """Save tracking data from client (for backup)"""
@@ -297,6 +260,46 @@ def save_tracking():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     return jsonify({'status': 'ok'})
 
+@app.route('/logo/<tracking_id>')
+def serve_logo(tracking_id):
+    """Serve logo and track open (for email clients that load images)"""
+    logger.info(f"🖼️ Logo requested with tracking: {tracking_id}")
+    logger.info(f"   IP: {request.remote_addr}")
+    logger.info(f"   User-Agent: {request.headers.get('User-Agent', 'Unknown')[:50]}")
+    
+    # Load tracking data
+    data = load_tracking_data()
+    
+    # Initialize if tracking_id doesn't exist
+    if tracking_id not in data:
+        logger.warning(f"⚠️ New tracking ID (logo): {tracking_id} - creating entry")
+        data[tracking_id] = {
+            'email': 'Unknown',
+            'campaign': 'General',
+            'sent_at': datetime.now().isoformat(),
+            'opens': [],
+            'clicks': [],
+            'prefetches': 0
+        }
+    
+    # Ensure opens list exists
+    if 'opens' not in data[tracking_id]:
+        data[tracking_id]['opens'] = []
+    
+    # Record the open (logo loads are almost always real opens)
+    data[tracking_id]['opens'].append({
+        'timestamp': datetime.now().isoformat(),
+        'ip': request.remote_addr,
+        'user_agent': request.headers.get('User-Agent', 'Unknown'),
+        'source': 'logo'  # Mark as logo-triggered
+    })
+    data[tracking_id]['last_open'] = datetime.now().isoformat()
+    save_tracking_data(data)
+    
+    logger.info(f"✅ Logo tracking recorded for: {tracking_id} (total opens: {len(data[tracking_id]['opens'])})")
+    
+    # Redirect to the actual logo
+    return redirect("https://i.ibb.co/3YYQXPHr/dantelabs-Logo.jpg", 302)
 
 @app.route('/ping')
 def ping():
