@@ -127,17 +127,18 @@ def stats():
         'campaigns': campaigns
     })
 
+# server.py - Updated track_open with pre-fetch detection
 
 @app.route('/open/<tracking_id>')
 def track_open(tracking_id):
-    """Track email open - handles both real opens and prefetches"""
+    """Track email open with pre-fetch detection"""
     logger.info(f"📨 Open request: {tracking_id}")
     logger.info(f"   IP: {request.remote_addr}")
-    logger.info(f"   User-Agent: {request.headers.get('User-Agent', 'Unknown')[:50]}")
+    logger.info(f"   User-Agent: {request.headers.get('User-Agent', 'Unknown')[:100]}")
     
     data = load_tracking_data()
     
-    # ALWAYS initialize if tracking_id doesn't exist
+    # Initialize if new
     if tracking_id not in data:
         logger.warning(f"⚠️ New tracking ID: {tracking_id} - creating entry")
         data[tracking_id] = {
@@ -146,45 +147,127 @@ def track_open(tracking_id):
             'sent_at': datetime.now().isoformat(),
             'opens': [],
             'clicks': [],
-            'prefetches': 0
+            'prefetches': 0,
+            'real_opens': 0
         }
     
-    # Ensure opens list exists
+    # Ensure lists exist
     if 'opens' not in data[tracking_id]:
         data[tracking_id]['opens'] = []
+    if 'prefetches' not in data[tracking_id]:
+        data[tracking_id]['prefetches'] = 0
+    if 'real_opens' not in data[tracking_id]:
+        data[tracking_id]['real_opens'] = 0
     
-    # Check if this is a prefetch (email client pre-loading)
+    # ========== DETECT PRE-FETCH ==========
     user_agent = request.headers.get('User-Agent', '').lower()
-    is_prefetch = any(agent in user_agent for agent in ['googleimageproxy', 'outlook', 'gmail', 'yahoo', 'prefetch'])
+    ip = request.remote_addr
     
+    # Check for pre-fetch patterns
+    is_prefetch = False
+    prefetch_reason = ""
+    
+    # 1. Known pre-fetch user agents
+    if any(agent in user_agent for agent in [
+        'googleimageproxy',      # Gmail image proxy
+        'googleusercontent',     # Google cache
+        'outlook',               # Outlook pre-fetch
+        'prefetch',              # Generic prefetch
+        'bot',                   # Search bots
+        'crawler',               # Web crawlers
+        'gmail',                 # Gmail internal
+        'yahoo'                  # Yahoo mail
+    ]):
+        is_prefetch = True
+        prefetch_reason = "Known email client pre-fetch"
+    
+    # 2. Multiple opens from same IP within 5 seconds
+    existing_opens = data[tracking_id].get('opens', [])
+    if existing_opens:
+        last_open = existing_opens[-1].get('timestamp', '')
+        if last_open:
+            try:
+                last_time = datetime.fromisoformat(last_open)
+                if (datetime.now() - last_time).seconds < 5:
+                    if ip == existing_opens[-1].get('ip', ''):
+                        is_prefetch = True
+                        prefetch_reason = "Duplicate open from same IP within 5 seconds"
+            except:
+                pass
+    
+    # 3. Record accordingly
     if is_prefetch:
-        # Record as prefetch
         data[tracking_id]['prefetches'] = data[tracking_id].get('prefetches', 0) + 1
-        logger.info(f"🔄 Prefetch detected for: {tracking_id}")
+        logger.info(f"🔄 PRE-FETCH detected: {tracking_id} - {prefetch_reason}")
     else:
-        # Record as real open
+        # Real open
         data[tracking_id]['opens'].append({
             'timestamp': datetime.now().isoformat(),
-            'ip': request.remote_addr,
+            'ip': ip,
             'user_agent': request.headers.get('User-Agent', 'Unknown')
         })
         data[tracking_id]['last_open'] = datetime.now().isoformat()
-        logger.info(f"✅ Real open recorded for: {tracking_id} (total: {len(data[tracking_id]['opens'])})")
+        data[tracking_id]['real_opens'] = data[tracking_id].get('real_opens', 0) + 1
+        logger.info(f"✅ REAL OPEN recorded: {tracking_id} (total: {len(data[tracking_id]['opens'])})")
     
     save_tracking_data(data)
     
-    # Return 1x1 transparent GIF with proper headers
+    # Return 1x1 transparent GIF
     pixel = b'GIF89a\x01\x00\x01\x00\x80\x00\x00\xff\xff\xff\x00\x00\x00!\xf9\x04\x01\x00\x00\x00\x00,\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x01D\x00;'
-    
-    response = Response(pixel, 200, {
+    return pixel, 200, {
         'Content-Type': 'image/gif',
         'Cache-Control': 'no-cache, no-store, must-revalidate, private',
         'Pragma': 'no-cache',
-        'Expires': '0',
-        'X-Content-Type-Options': 'nosniff'
-    })
-    return response
+        'Expires': '0'
+    }
 
+
+@app.route('/logo/<tracking_id>')
+def serve_logo(tracking_id):
+    """Serve logo with pre-fetch detection"""
+    logger.info(f"🖼️ Logo requested: {tracking_id}")
+    
+    data = load_tracking_data()
+    
+    if tracking_id not in data:
+        data[tracking_id] = {
+            'email': 'Unknown',
+            'campaign': 'General',
+            'sent_at': datetime.now().isoformat(),
+            'opens': [],
+            'clicks': [],
+            'prefetches': 0,
+            'real_opens': 0
+        }
+    
+    if 'opens' not in data[tracking_id]:
+        data[tracking_id]['opens'] = []
+    if 'prefetches' not in data[tracking_id]:
+        data[tracking_id]['prefetches'] = 0
+    
+    # Check for pre-fetch (logo is often pre-fetched)
+    user_agent = request.headers.get('User-Agent', '').lower()
+    is_prefetch = any(agent in user_agent for agent in [
+        'googleimageproxy', 'googleusercontent', 'outlook', 'prefetch', 'bot', 'crawler'
+    ])
+    
+    if is_prefetch:
+        data[tracking_id]['prefetches'] = data[tracking_id].get('prefetches', 0) + 1
+        logger.info(f"🔄 Logo PRE-FETCH: {tracking_id}")
+    else:
+        data[tracking_id]['opens'].append({
+            'timestamp': datetime.now().isoformat(),
+            'ip': request.remote_addr,
+            'user_agent': request.headers.get('User-Agent', 'Unknown'),
+            'source': 'logo'
+        })
+        data[tracking_id]['last_open'] = datetime.now().isoformat()
+        data[tracking_id]['real_opens'] = data[tracking_id].get('real_opens', 0) + 1
+        logger.info(f"✅ Logo REAL OPEN: {tracking_id}")
+    
+    save_tracking_data(data)
+    
+    return redirect("https://i.ibb.co/3YYQXPHr/dantelabs-Logo.jpg", 302)
 
 @app.route('/click/<tracking_id>')
 def track_click(tracking_id):
@@ -260,46 +343,6 @@ def save_tracking():
         return jsonify({'status': 'error', 'message': str(e)}), 500
     return jsonify({'status': 'ok'})
 
-@app.route('/logo/<tracking_id>')
-def serve_logo(tracking_id):
-    """Serve logo and track open (for email clients that load images)"""
-    logger.info(f"🖼️ Logo requested with tracking: {tracking_id}")
-    logger.info(f"   IP: {request.remote_addr}")
-    logger.info(f"   User-Agent: {request.headers.get('User-Agent', 'Unknown')[:50]}")
-    
-    # Load tracking data
-    data = load_tracking_data()
-    
-    # Initialize if tracking_id doesn't exist
-    if tracking_id not in data:
-        logger.warning(f"⚠️ New tracking ID (logo): {tracking_id} - creating entry")
-        data[tracking_id] = {
-            'email': 'Unknown',
-            'campaign': 'General',
-            'sent_at': datetime.now().isoformat(),
-            'opens': [],
-            'clicks': [],
-            'prefetches': 0
-        }
-    
-    # Ensure opens list exists
-    if 'opens' not in data[tracking_id]:
-        data[tracking_id]['opens'] = []
-    
-    # Record the open (logo loads are almost always real opens)
-    data[tracking_id]['opens'].append({
-        'timestamp': datetime.now().isoformat(),
-        'ip': request.remote_addr,
-        'user_agent': request.headers.get('User-Agent', 'Unknown'),
-        'source': 'logo'  # Mark as logo-triggered
-    })
-    data[tracking_id]['last_open'] = datetime.now().isoformat()
-    save_tracking_data(data)
-    
-    logger.info(f"✅ Logo tracking recorded for: {tracking_id} (total opens: {len(data[tracking_id]['opens'])})")
-    
-    # Redirect to the actual logo
-    return redirect("https://i.ibb.co/3YYQXPHr/dantelabs-Logo.jpg", 302)
 
 @app.route('/ping')
 def ping():
