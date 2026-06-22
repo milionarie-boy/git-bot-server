@@ -38,32 +38,28 @@ def save_tracking_data(data):
         return False
 
 
+# server.py - Updated dashboard with clicker information
+
 @app.route('/')
 def home():
-    """Dashboard showing click statistics"""
+    """Dashboard showing who clicked with email addresses"""
     data = load_tracking_data()
     
     total_clicks = 0
-    unique_clicks = 0
-    unique_emails = set()
+    unique_clickers = set()
     
     for tracking_id, d in data.items():
         clicks = d.get('clicks', [])
         total_clicks += len(clicks)
         email = d.get('email', '')
-        if email:
-            unique_emails.add(email)
-        # Count unique clicks per tracking ID
-        unique_ips = set()
-        for click in clicks:
-            unique_ips.add(click.get('ip', ''))
-        unique_clicks += len(unique_ips)
+        if email and email != 'Unknown':
+            unique_clickers.add(email)
     
     html = """
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Dante Labs - Click Tracking</title>
+        <title>Dante Labs - Click Tracking Dashboard</title>
         <style>
             body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
             .card { background: white; padding: 20px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -71,50 +67,98 @@ def home():
             .stat-box { background: #e3f2fd; padding: 15px 25px; border-radius: 8px; }
             .stat-box h3 { margin: 0; color: #1565C0; }
             .stat-box p { margin: 5px 0 0; font-size: 24px; font-weight: bold; }
-            .click-item { border-left: 4px solid #4CAF50; margin: 10px 0; padding: 10px 15px; background: #fafafa; }
-            .click-email { color: #2196F3; font-weight: bold; }
+            .click-item { border-left: 4px solid #4CAF50; margin: 10px 0; padding: 10px 15px; background: #fafafa; border-radius: 4px; }
+            .click-email { color: #2196F3; font-weight: bold; font-size: 16px; }
+            .click-username { color: #4CAF50; }
             .click-url { color: #FF9800; }
             .click-time { color: #666; font-size: 12px; }
+            .click-count { background: #FF9800; color: white; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
+            table { width: 100%; border-collapse: collapse; }
+            th { text-align: left; padding: 8px; background: #f0f0f0; }
+            td { padding: 8px; border-bottom: 1px solid #eee; }
+            .highlight { background: #fff8e1; }
     </style>
     </head>
     <body>
-        <h1>🔗 Dante Labs - Click Tracking Dashboard</h1>
+        <h1>🔗 Click Tracking Dashboard</h1>
+        
         <div class="card">
             <div class="stats">
-                <div class="stat-box"><h3>📧 Clicked Users</h3><p>""" + str(len(unique_emails)) + """</p></div>
+                <div class="stat-box"><h3>📧 Clickers</h3><p>""" + str(len(unique_clickers)) + """</p></div>
                 <div class="stat-box"><h3>🖱️ Total Clicks</h3><p>""" + str(total_clicks) + """</p></div>
-                <div class="stat-box"><h3>🔄 Unique Clicks</h3><p>""" + str(unique_clicks) + """</p></div>
             </div>
+        </div>
+        
+        <div class="card">
+            <h2>📋 Who Clicked</h2>
+            <table>
+                <tr>
+                    <th>Email</th>
+                    <th>Username</th>
+                    <th>Role</th>
+                    <th>Clicks</th>
+                    <th>Last Click</th>
+                    <th>Action</th>
+                </tr>
+    """
+    
+    # Sort by most recent click
+    sorted_data = sorted(data.items(), key=lambda x: x[1].get('last_click', ''), reverse=True)
+    
+    for tracking_id, d in sorted_data:
+        email = d.get('email', 'Unknown')
+        if email == 'Unknown':
+            continue
+        
+        username = d.get('username', '')
+        role = d.get('role', '')
+        clicks = d.get('clicks', [])
+        last_click = clicks[-1].get('timestamp', '') if clicks else ''
+        url = clicks[-1].get('url', '') if clicks else ''
+        
+        html += f"""
+            <tr>
+                <td><strong class="click-email">{email}</strong></td>
+                <td class="click-username">@{username if username else 'N/A'}</td>
+                <td>{role if role else 'N/A'}</td>
+                <td><span class="click-count">{len(clicks)}</span></td>
+                <td class="click-time">{last_click[:19] if last_click else 'Never'}</td>
+                <td><a href="{url}" target="_blank" style="color: #6366f1;">View</a></td>
+            </tr>
+        """
+    
+    html += """
+            </table>
         </div>
     """
     
-    for tracking_id, d in data.items():
-        email = d.get('email', 'Unknown')
-        campaign = d.get('campaign', 'General')
-        clicks = d.get('clicks', [])
-        
-        if clicks:
-            html += f"""
-            <div class="card click-item">
-                <p><span class="click-email">📧 {email}</span></p>
-                <p><strong>Campaign:</strong> {campaign}</p>
-                <p><strong>Total Clicks:</strong> {len(clicks)}</p>
-                <p><strong>Last Click:</strong> {clicks[-1].get('timestamp', 'Unknown')}</p>
-                <details>
-                    <summary>Click Details</summary>
-            """
-            for click in clicks[-5:]:  # Show last 5 clicks
-                html += f"""
-                    <p style="margin: 5px 0; font-size: 13px;">
-                        <span class="click-time">{click.get('timestamp', '')[:19]}</span> → 
-                        <span class="click-url">{click.get('url', '')[:60]}</span>
-                    </p>
-                """
-            html += "</details></div>"
+    # Also show campaign summary
+    html += """
+        <div class="card">
+            <h2>📊 Campaign Summary</h2>
+    """
     
-    html += "</body></html>"
+    campaigns = {}
+    for tracking_id, d in data.items():
+        campaign = d.get('campaign', 'General')
+        if campaign not in campaigns:
+            campaigns[campaign] = {'clicks': 0, 'users': set()}
+        campaigns[campaign]['clicks'] += len(d.get('clicks', []))
+        email = d.get('email', '')
+        if email and email != 'Unknown':
+            campaigns[campaign]['users'].add(email)
+    
+    for campaign, stats in campaigns.items():
+        html += f"""
+            <p><strong>{campaign}</strong>: {stats['clicks']} clicks from {len(stats['users'])} users</p>
+        """
+    
+    html += """
+        </div>
+    </body>
+    </html>
+    """
     return html
-
 
 @app.route('/stats')
 def stats():
